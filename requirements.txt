@@ -1,0 +1,4 @@
+yfinance
+transformers
+torch
+accelerate
