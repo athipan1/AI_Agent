@@ -1,247 +1,198 @@
-import torch
-from transformers import pipeline
+import pandas as pd
+import numpy as np
 import json
+from data_fetcher import get_stocks_data # For example usage
 
-
-# Using a more lightweight model to prevent memory-related crashes.
-generator = pipeline(
-    "text-generation",
-    model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    model_kwargs={"torch_dtype": torch.bfloat16},
-    device_map="auto",
-)
-
-
-def get_roe_score(roe):
-    """Calculates the score component for ROE."""
-    if roe > 0.20:
-        return 0.25
-    if roe > 0.15:
-        return 0.15
-    if roe > 0.05:
-        return 0.05
-    return 0.0
-
-
-def get_de_ratio_score(de_ratio):
-    """Calculates the score component for D/E ratio."""
-    if de_ratio < 0.5:
-        return 0.20
-    if de_ratio < 1.0:
-        return 0.10
-    if de_ratio < 2.0:
-        return 0.05
-    return 0.0
-
-
-def get_revenue_trend_score(historical_revenue: dict) -> tuple[float, str]:
+def calculate_peer_stats(peer_data: dict) -> dict:
     """
-    Analyzes the 3-year revenue trend for growth consistency.
-    Returns a score and a descriptive string.
+    Calculates mean and median statistics for a group of peer companies.
+
+    Args:
+        peer_data (dict): A dictionary containing financial data for peer companies,
+                          with tickers as keys.
+
+    Returns:
+        A dictionary containing the mean and median for each financial metric.
     """
-    if not historical_revenue or len(historical_revenue) < 4:
-        return 0.0, "ข้อมูลไม่เพียงพอ"
+    if not peer_data:
+        return {}
 
-    # Sort by year (descending) to get the last 4 years
-    years = sorted(historical_revenue.keys(), reverse=True)[:4]
-    revenues = [historical_revenue[year] for year in years]
+    # Convert the peer data into a pandas DataFrame
+    df = pd.DataFrame.from_dict(peer_data, orient='index')
 
-    # Check growth for the last 3 periods
-    growth_years = 0
-    if revenues[0] > revenues[1]:
-        growth_years += 1
-    if revenues[1] > revenues[2]:
-        growth_years += 1
-    if revenues[2] > revenues[3]:
-        growth_years += 1
+    # List of metrics to calculate stats for
+    numeric_metrics = [
+        'P/E', 'Forward P/E', 'PEG Ratio', 'EPS', 'EPS Growth',
+        'Debt/Equity', 'ROE', 'Operating Margin', 'Gross Margin',
+        'Revenue Growth', 'Free Cash Flow'
+    ]
 
-    if growth_years == 3:
-        score = 0.15
-        trend_string = "เติบโตต่อเนื่อง 3 ปี"
-    elif growth_years == 2:
-        score = 0.10
-        trend_string = "เติบโต 2 ใน 3 ปีล่าสุด"
-    elif growth_years == 1:
-        score = 0.05
-        trend_string = "เติบโต 1 ใน 3 ปีล่าสุด"
-    else:
-        score = 0.0
-        trend_string = "รายได้ไม่เติบโต"
+    stats = {}
+    for metric in numeric_metrics:
+        # Convert column to numeric, coercing errors to NaN
+        numeric_series = pd.to_numeric(df.get(metric), errors='coerce')
+        if not numeric_series.empty and numeric_series.notna().any():
+            stats[metric] = {
+                'mean': numeric_series.mean(),
+                'median': numeric_series.median()
+            }
+        else:
+            stats[metric] = {'mean': np.nan, 'median': np.nan}
 
-    return score, trend_string
+    return stats
 
+def create_peer_comparison_table(target_data: dict, peer_stats: dict) -> str:
+    """
+    Creates a formatted Markdown table comparing the target company to its peers.
+    """
+    table = "| Metric             | Target Company | Peer Group (Mean) | Comparison vs Mean |\n"
+    table += "|--------------------|----------------|-------------------|--------------------|\n"
 
-def calculate_cagr(historical_revenue: dict) -> float | None:
-    """Calculates the 3-year Compound Annual Growth Rate (CAGR)."""
-    if not historical_revenue or len(historical_revenue) < 4:
-        return None
-
-    years = sorted(historical_revenue.keys(), reverse=True)[:4]
-    start_value = historical_revenue[years[3]]  # Earliest year
-    end_value = historical_revenue[years[0]]   # Most recent year
-
-    if start_value is None or end_value is None or start_value <= 0:
-        return None
-
-    try:
-        cagr = ((end_value / start_value) ** (1/3)) - 1
-        return cagr
-    except (TypeError, ZeroDivisionError):
-        return None
-
-
-def get_margins_score(margins):
-    """Calculates the score component for profit margins."""
-    if margins > 0.20:
-        return 0.10
-    return 0.0
-
-
-def get_pe_ratio_score(pe_ratio):
-    """Calculates the score component for P/E ratio."""
-    if pe_ratio is None:
-        return 0.0
-    if 0 < pe_ratio < 15:
-        return 0.10
-    if pe_ratio < 25:
-        return 0.05
-    return 0.0
-
-
-def get_dividend_yield_score(dividend_yield):
-    """Calculates the score component for dividend yield."""
-    if dividend_yield is None:
-        return 0.0
-    if dividend_yield > 0.04:
-        return 0.10
-    if dividend_yield > 0.02:
-        return 0.05
-    return 0.0
-
-
-def get_pb_ratio_score(pb_ratio):
-    """Calculates the score component for P/B ratio."""
-    if pb_ratio is None:
-        return 0.0
-    if 0 < pb_ratio < 1.2:
-        return 0.05
-    return 0.0
-
-
-def get_eps_score(eps):
-    """Calculates the score component for EPS."""
-    if eps is None:
-        return 0.0
-    if eps > 0:
-        return 0.05
-    return 0.0
-
-
-def calculate_score(data: dict, trend_score: float) -> float:
-    """Calculates a score from 0.0 to 1.0 based on raw financial metrics."""
-    try:
-        roe = data.get("ROE") or 0.0
-        de_ratio = (data.get("Debt to Equity Ratio") or float('inf')) / 100.0
-        margins = data.get("Profit Margins") or 0.0
-        pe_ratio = data.get("P/E Ratio")
-        dividend_yield = data.get("Dividend Yield")
-        pb_ratio = data.get("P/B Ratio")
-        eps = data.get("EPS")
-
-        score = 0.0
-        score += get_roe_score(roe)
-        score += get_de_ratio_score(de_ratio)
-        score += trend_score
-        score += get_margins_score(margins)
-        score += get_pe_ratio_score(pe_ratio)
-        score += get_dividend_yield_score(dividend_yield)
-        score += get_pb_ratio_score(pb_ratio)
-        score += get_eps_score(eps)
-
-    except (ValueError, TypeError):
-        return 0.0
-    return min(round(score, 2), 1.0)
-
-
-def generate_strength(score: float) -> str:
-    """Generates a Thai strength summary based on the calculated score."""
-    if score >= 0.7:
-        return "พื้นฐานแข็งแกร่ง"
-    if score >= 0.4:
-        return "พื้นฐานปานกลาง"
-    return "พื้นฐานอ่อนแอและมีความเสี่ยง"
-
-
-def create_prompt(
-    data: dict, ticker: str, trend: str, cagr: float | None
-) -> str:
-    """Creates a simple prompt with formatted data for the LLM."""
-    formatted_data = {
-        "ROE": f"{data.get('ROE', 0):.2%}",
-        "D/E Ratio": f"{data.get('Debt to Equity Ratio', 0):.2f}",
-        "Profit Margins": f"{data.get('Profit Margins', 0):.2%}",
-        "P/E Ratio": f"{data.get('P/E Ratio', 0):.2f}",
-        "P/B Ratio": f"{data.get('P/B Ratio', 0):.2f}",
-        "EPS": f"{data.get('EPS', 0):.2f}",
-        "Dividend Yield": f"{data.get('Dividend Yield', 0):.2%}",
-        "Revenue Trend": trend,
+    metrics_to_compare = {
+        'P/E': '{:.2f}',
+        'Forward P/E': '{:.2f}',
+        'PEG Ratio': '{:.2f}',
+        'ROE': '{:.2%}',
+        'Operating Margin': '{:.2%}',
+        'Gross Margin': '{:.2%}',
+        'Revenue Growth': '{:.2%}',
+        'EPS Growth': '{:.2%}',
+        'Debt/Equity': '{:.2f}',
     }
-    if cagr is not None:
-        formatted_data["3Y Revenue CAGR"] = f"{cagr:.2%}"
 
-    data_string = ", ".join([
-        f"{key}: {value}" for key, value in formatted_data.items()
-    ])
+    for metric, fmt in metrics_to_compare.items():
+        target_val = target_data.get(metric)
+        peer_mean = peer_stats.get(metric, {}).get('mean')
 
-    prompt = f"""
-    Based on the following data for {ticker} ({data_string}), write a single,
-    brief sentence in Thai summarizing the financial situation.
+        target_str = fmt.format(target_val) if isinstance(target_val, (int, float)) else "N/A"
+        peer_str = fmt.format(peer_mean) if isinstance(peer_mean, (int, float)) and not np.isnan(peer_mean) else "N/A"
+
+        comparison_str = "N/A"
+        if isinstance(target_val, (int, float)) and isinstance(peer_mean, (int, float)) and not np.isnan(peer_mean) and peer_mean != 0:
+            diff = (target_val - peer_mean) / abs(peer_mean)
+            prefix = "+" if diff >= 0 else ""
+            comparison_str = f"{prefix}{diff:.1%}"
+
+        table += f"| {metric:<18} | {target_str:<14} | {peer_str:<17} | {comparison_str:<18} |\n"
+
+    return table
+
+def calculate_summary_score(target_data: dict, peer_stats: dict) -> int:
     """
-    return prompt
+    Calculates a summary score (0-100) based on the company's performance
+    relative to its peers.
 
+    Weights:
+    - Valuation: 30%
+    - Fundamental Strength: 70%
+    """
+    score = 50  # Start from a baseline of 50
 
-def analyze_financials(ticker: str, data: dict) -> dict:
+    # --- Valuation Score (30 points) ---
+    # Lower is better for P/E, Fwd P/E, PEG
+    valuation_metrics = ['P/E', 'Forward P/E', 'PEG Ratio']
+    for metric in valuation_metrics:
+        target = pd.to_numeric(target_data.get(metric), errors='coerce')
+        peer_mean = peer_stats.get(metric, {}).get('mean')
+        if pd.notna(target) and pd.notna(peer_mean) and peer_mean > 0:
+            if target < peer_mean * 0.8: score += 5 # Significantly cheaper
+            elif target < peer_mean: score += 2 # Cheaper
+            elif target > peer_mean * 1.5: score -= 5 # Significantly more expensive
+            elif target > peer_mean: score -= 2 # More expensive
+
+    # --- Fundamental Strength Score (70 points) ---
+    # Higher is better for ROE, Margins, Growth
+    positive_metrics = ['ROE', 'Operating Margin', 'Gross Margin', 'Revenue Growth', 'EPS Growth']
+    for metric in positive_metrics:
+        target = pd.to_numeric(target_data.get(metric), errors='coerce')
+        peer_mean = peer_stats.get(metric, {}).get('mean')
+        if pd.notna(target) and pd.notna(peer_mean):
+            if target > peer_mean * 1.5: score += 7 # Significantly stronger
+            elif target > peer_mean: score += 3 # Stronger
+            elif target < peer_mean * 0.8: score -= 7 # Significantly weaker
+            elif target < peer_mean: score -= 3 # Weaker
+
+    # Lower is better for Debt/Equity
+    target_de = pd.to_numeric(target_data.get('Debt/Equity'), errors='coerce')
+    peer_de = peer_stats.get('Debt/Equity', {}).get('mean')
+    if pd.notna(target_de) and pd.notna(peer_de):
+        if target_de < peer_de * 0.5: score += 7 # Significantly lower debt
+        elif target_de < peer_de: score += 3 # Lower debt
+        elif target_de > peer_de * 1.5: score -= 7 # Significantly higher debt
+        elif target_de > peer_de: score -= 3 # Higher debt
+
+    return max(0, min(100, int(score))) # Clamp score between 0 and 100
+
+def analyze_with_peers(target_ticker: str, all_data: dict) -> dict | None:
     """
-    Uses Python for scoring and JSON assembly, and an LLM for reasoning.
+    Performs a full peer comparison analysis.
+
+    Args:
+        target_ticker (str): The main ticker to analyze.
+        all_data (dict): The dictionary of data from get_stocks_data, including
+                         the target and its peers.
+
+    Returns:
+        A dictionary containing the full analysis, or None if data is insufficient.
     """
-    if not data:
+    target_data = all_data.get(target_ticker)
+    if not target_data:
+        print(f"No data found for target ticker {target_ticker} in the provided data.")
         return None
 
-    historical_revenue = data.get("Historical Revenue", {})
-    trend_score, trend_string = get_revenue_trend_score(historical_revenue)
-    cagr = calculate_cagr(historical_revenue)
+    peer_tickers = [t for t in all_data if t != target_ticker]
+    peer_data = {t: d for t, d in all_data.items() if t in peer_tickers}
 
-    score = calculate_score(data, trend_score)
-    strength = generate_strength(score)
+    if not peer_data:
+        print(f"No peer data available for analysis of {target_ticker}.")
+        return {"error": "No peer data available."}
 
-    prompt = create_prompt(data, ticker, trend_string, cagr)
-    messages = [{"role": "user", "content": prompt}]
+    # 1. Calculate peer statistics
+    peer_stats = calculate_peer_stats(peer_data)
 
-    reasoning = "ไม่สามารถสร้างคำวิเคราะห์ได้"  # Default value
-    try:
-        outputs = generator(messages, max_new_tokens=128, do_sample=False)
-        generated_text = outputs[0]["generated_text"][-1]['content'].strip()
-        if generated_text:
-            reasoning = generated_text
-    except Exception as e:
-        print(f"An error occurred during text generation: {e}")
-        reasoning = f"เกิดข้อผิดพลาดในการสร้างคำวิเคราะห์: {e}"
+    # 2. Create comparison table
+    comparison_table = create_peer_comparison_table(target_data, peer_stats)
 
-    return {
-        "strength": strength,
-        "reasoning": reasoning,
-        "score": score
+    # 3. Calculate summary score
+    summary_score = calculate_summary_score(target_data, peer_stats)
+
+    analysis_result = {
+        "peer_stats": {k: v for k, v in peer_stats.items() if not all(np.isnan(val) for val in v.values())}, # Clean up NaN stats
+        "comparison_table": comparison_table,
+        "summary_score": summary_score
     }
+
+    return analysis_result
 
 
 if __name__ == '__main__':
-    sample_ticker = 'AAPL'
-    sample_data = {
-        'ROE': 1.7142, 'Debt to Equity Ratio': 152.41,
-        'Quarterly Revenue Growth (yoy)': 0.079, 'Profit Margins': 0.2692
-    }
-    print(f"--- Starting analysis for {sample_ticker} ---")
-    analysis_result = analyze_financials(sample_ticker, sample_data)
-    if analysis_result:
-        print("\n--- Analysis Result ---")
-        print(json.dumps(analysis_result, indent=4, ensure_ascii=False))
+    from peer_finder import find_peers
+
+    # --- Example Usage ---
+    target = 'AAPL'
+    print(f"--- Starting Peer Analysis for {target} ---")
+
+    # 1. Find peers
+    peers = find_peers(target)
+
+    if peers:
+        print(f"Found {len(peers)} peers: {peers[:5]}...") # Print first 5
+
+        # 2. Fetch data for target and peers
+        all_tickers = [target] + peers
+        all_stocks_data = get_stocks_data(all_tickers)
+
+        if all_stocks_data:
+            # 3. Analyze
+            analysis = analyze_with_peers(target, all_stocks_data)
+
+            if analysis:
+                print("\n--- Analysis Result ---")
+                print("\nPeer Comparison Table:")
+                print(analysis["comparison_table"])
+                print(f"Summary Score: {analysis['summary_score']}/100")
+
+                # print("\nPeer Stats (Mean/Median):")
+                # print(json.dumps(analysis['peer_stats'], indent=2))
+
+    print("\n--- Analysis Complete ---")
