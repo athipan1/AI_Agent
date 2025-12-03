@@ -80,8 +80,8 @@ def _calculate_valuation_score(score, target_data, peer_stats):
     return score
 
 
-def _calculate_strength_score(score, target_data, peer_stats):
-    """Calculates the fundamental strength component of the summary score."""
+def _adjust_score_for_positive_metrics(score, target_data, peer_stats):
+    """Adjusts score based on metrics where higher is better."""
     positive_metrics = [
         'ROE', 'Operating Margin', 'Gross Margin', 'Revenue Growth', 'EPS Growth'
     ]
@@ -97,7 +97,11 @@ def _calculate_strength_score(score, target_data, peer_stats):
                 score -= 7  # Significantly weaker
             elif target < peer_mean:
                 score -= 3  # Weaker
+    return score
 
+
+def _adjust_score_for_debt(score, target_data, peer_stats):
+    """Adjusts score based on the debt-to-equity ratio."""
     target_de = pd.to_numeric(target_data.get('Debt/Equity'), errors='coerce')
     peer_de = peer_stats.get('Debt/Equity', {}).get('mean')
     if pd.notna(target_de) and pd.notna(peer_de):
@@ -118,7 +122,8 @@ def calculate_summary_score(target_data: dict, peer_stats: dict) -> int:
     """
     score = 50  # Start from a baseline of 50
     score = _calculate_valuation_score(score, target_data, peer_stats)
-    score = _calculate_strength_score(score, target_data, peer_stats)
+    score = _adjust_score_for_positive_metrics(score, target_data, peer_stats)
+    score = _adjust_score_for_debt(score, target_data, peer_stats)
     return max(0, min(100, int(score)))  # Clamp score between 0 and 100
 
 
