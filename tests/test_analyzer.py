@@ -7,7 +7,7 @@ import numpy as np
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from analyzer import (
+from analyzer import (  # noqa: E402
     calculate_peer_stats, calculate_summary_score, create_peer_comparison_table
 )
 
