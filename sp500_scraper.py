@@ -2,13 +2,18 @@ import requests
 from bs4 import BeautifulSoup
 import csv
 
+
 def scrape_sp500_companies():
     """
     Scrapes the list of S&P 500 companies from Wikipedia and saves it to a CSV file.
     The CSV file will contain Symbol, Security, GICS Sector, and GICS Sub-Industry.
     """
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/58.0.3029.110 Safari/537.36'
+    }
 
     try:
         response = requests.get(url, headers=headers)
@@ -23,7 +28,7 @@ def scrape_sp500_companies():
     table = soup.find('table', {'id': 'constituents'})
 
     if not table:
-        print("Could not find the S&P 500 components table with id 'constituents'.")
+        print("Could not find the S&P 500 components table.")
         return
 
     companies = []
@@ -39,13 +44,14 @@ def scrape_sp500_companies():
 
     # Write the data to a CSV file
     try:
-        with open('sp500_companies.csv', 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
+        with open('sp500_companies.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
             writer.writerow(['Symbol', 'Security', 'GICS Sector', 'GICS Sub-Industry'])
             writer.writerows(companies)
-        print("Successfully scraped and saved S&P 500 companies to sp500_companies.csv")
+        print("Successfully saved S&P 500 data to sp500_companies.csv")
     except IOError as e:
         print(f"Error writing to file: {e}")
+
 
 if __name__ == '__main__':
     scrape_sp500_companies()

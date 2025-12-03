@@ -1,5 +1,5 @@
 import yfinance as yf
-import pandas as pd
+
 
 def get_stocks_data(tickers: list) -> dict:
     """
@@ -24,53 +24,40 @@ def get_stocks_data(tickers: list) -> dict:
         stock_obj = stocks.tickers.get(ticker.upper())
 
         # Check if the ticker object or its info is invalid/empty
-        if stock_obj is None or stock_obj.info is None or not stock_obj.info or stock_obj.info.get('trailingPE') is None:
+        info = getattr(stock_obj, 'info', None)
+        if not info or info.get('trailingPE') is None:
             print(f"Warning: Could not retrieve valid data for {ticker}. Skipping.")
             continue
-
-        info = stock_obj.info
 
         # Define all required metrics and their corresponding keys in yfinance info
         # Use 'ข้อมูลไม่ครบ' as the default value.
         metric_keys = {
-            'Sector': 'sector',
-            'Industry': 'industry',
-            'Market Cap': 'marketCap',
-            'P/E': 'trailingPE',
-            'Forward P/E': 'forwardPE',
-            'PEG Ratio': 'pegRatio',
-            'EPS': 'trailingEps',
-            'EPS Growth': 'earningsGrowth',
-            'Debt/Equity': 'debtToEquity',
-            'ROE': 'returnOnEquity',
-            'Operating Margin': 'operatingMargins',
-            'Gross Margin': 'grossMargins',
-            'Revenue Growth': 'revenueGrowth',
+            'Sector': 'sector', 'Industry': 'industry', 'Market Cap': 'marketCap',
+            'P/E': 'trailingPE', 'Forward P/E': 'forwardPE', 'PEG Ratio': 'pegRatio',
+            'EPS': 'trailingEps', 'EPS Growth': 'earningsGrowth', 'Debt/Equity': 'debtToEquity',
+            'ROE': 'returnOnEquity', 'Operating Margin': 'operatingMargins',
+            'Gross Margin': 'grossMargins', 'Revenue Growth': 'revenueGrowth',
             'Free Cash Flow': 'freeCashflow',
         }
-
         data = {key: info.get(value, 'ข้อมูลไม่ครบ') for key, value in metric_keys.items()}
 
         # --- Historical Price Data ---
         try:
             hist_1y = stock_obj.history(period="1y")
-            hist_5y = stock_obj.history(period="5y")
-
             if not hist_1y.empty:
-                # Convert timestamps to strings for JSON compatibility
                 data['Historical Price (1Y)'] = {
                     k.strftime('%Y-%m-%d'): v for k, v in hist_1y['Close'].to_dict().items()
                 }
             else:
                 data['Historical Price (1Y)'] = 'ข้อมูลไม่ครบ'
 
+            hist_5y = stock_obj.history(period="5y")
             if not hist_5y.empty:
                 data['Historical Price (5Y)'] = {
                     k.strftime('%Y-%m-%d'): v for k, v in hist_5y['Close'].to_dict().items()
                 }
             else:
                 data['Historical Price (5Y)'] = 'ข้อมูลไม่ครบ'
-
         except Exception as e:
             print(f"Could not fetch historical data for {ticker}: {e}")
             data['Historical Price (1Y)'] = 'ข้อมูลไม่ครบ'
@@ -79,6 +66,7 @@ def get_stocks_data(tickers: list) -> dict:
         all_data[ticker] = data
 
     return all_data
+
 
 if __name__ == '__main__':
     # --- Example Usage ---
