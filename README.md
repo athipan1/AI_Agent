@@ -19,10 +19,10 @@ This project also provides a FastAPI server to expose the analysis functionality
 To start the server, run the following command:
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8001
 ```
 
-The API will be available at `http://127.0.0.1:8000`.
+The API will be available at `http://127.0.0.1:8001`.
 
 ### API Endpoints
 
