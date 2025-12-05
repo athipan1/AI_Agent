@@ -4,3 +4,6 @@ torch
 accelerate
 flake8
 pytest
+fastapi
+uvicorn
+httpx
